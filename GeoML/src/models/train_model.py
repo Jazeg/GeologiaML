@@ -20,6 +20,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sys
+
+# Añadir el directorio raíz al path
+project_dir = Path(__file__).resolve().parents[2]
+sys.path.append(str(project_dir))
+
+# Importar módulo de preprocesamiento
+from src.data.preprocess import preprocess_for_nspt_prediction, preprocess_for_qadm_prediction
 
 def load_data():
     """
@@ -42,78 +50,7 @@ def load_data():
         print(f"No se encontró el archivo procesado: {processed_path}")
         return None
 
-def prepare_vs_depth_data(df):
-    """
-    Prepara los datos para predecir Vs en función de la profundidad.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame con los datos procesados
-        
-    Returns:
-    --------
-    tuple
-        X_train, X_test, y_train, y_test, feature_names
-    """
-    # Filtrar solo datos de ensayos MW (que tienen Vs)
-    df_mw = df[df['tipo_ensayo'] == 'MW'].copy()
-    
-    # Verificar que haya datos suficientes
-    if len(df_mw) < 10:
-        print("Datos insuficientes para modelado")
-        return None, None, None, None, None
-    
-    # Features y target
-    X = df_mw[['profundidad_media', 'Norte', 'Este']].copy()
-    y = df_mw['Vs (m/s)'].copy()
-    
-    # Dividir en train/test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42
-    )
-    
-    return X_train, X_test, y_train, y_test, X.columns.tolist()
-
-def prepare_nspt_depth_data(df):
-    """
-    Prepara los datos para predecir NSPT en función de la profundidad.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame con los datos procesados
-        
-    Returns:
-    --------
-    tuple
-        X_train, X_test, y_train, y_test, feature_names
-    """
-    # Filtrar solo datos de ensayos SPT (que tienen NSPT)
-    df_spt = df[df['tipo_ensayo'] == 'SPT'].copy()
-    
-    # Verificar que haya datos suficientes
-    if len(df_spt) < 10:
-        print("Datos insuficientes para modelado")
-        return None, None, None, None, None
-    
-    # Features y target
-    X = df_spt[['profundidad_media', 'Norte', 'Este']].copy()
-    y = df_spt['Nspt'].copy()
-    
-    # Eliminar filas con NaN en target
-    valid_indices = ~y.isna()
-    X = X[valid_indices]
-    y = y[valid_indices]
-    
-    # Dividir en train/test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42
-    )
-    
-    return X_train, X_test, y_train, y_test, X.columns.tolist()
-
-def train_models(X_train, y_train, model_type='vs'):
+def train_models(X_train, y_train, model_type='nspt'):
     """
     Entrena varios modelos y selecciona el mejor.
     
@@ -124,7 +61,7 @@ def train_models(X_train, y_train, model_type='vs'):
     y_train : pandas.Series
         Target de entrenamiento
     model_type : str
-        Tipo de modelo ('vs' o 'nspt')
+        Tipo de modelo ('nspt' o 'qadm')
         
     Returns:
     --------
@@ -173,20 +110,15 @@ def train_models(X_train, y_train, model_type='vs'):
     for name, model in models.items():
         print(f"Entrenando {name}...")
         
-        # Crear pipeline con escalado
-        pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('model', model)
-        ])
+        # Crear pipeline (en este caso, el escalado ya está en el preprocesador)
+        pipeline = model
         
         # Ajustar parámetros de GridSearchCV según el modelo
-        param_grid = {}
-        for param, values in params[name].items():
-            param_grid[f'model__{param}'] = values
+        param_grid = params[name]
         
         # Si no hay parámetros, usar un diccionario vacío
         if not param_grid:
-            grid_search = pipeline.fit(X_train, y_train)
+            pipeline.fit(X_train, y_train)
             best_model = pipeline
             best_params = {}
         else:
@@ -217,7 +149,7 @@ def train_models(X_train, y_train, model_type='vs'):
     
     return best_model, results
 
-def evaluate_model(model, X_test, y_test, feature_names, model_type='vs'):
+def evaluate_model(model, X_test, y_test, feature_names, model_type='nspt'):
     """
     Evalúa el modelo en el conjunto de prueba.
     
@@ -232,7 +164,7 @@ def evaluate_model(model, X_test, y_test, feature_names, model_type='vs'):
     feature_names : list
         Nombres de las features
     model_type : str
-        Tipo de modelo ('vs' o 'nspt')
+        Tipo de modelo ('nspt' o 'qadm')
         
     Returns:
     --------
@@ -278,8 +210,8 @@ def evaluate_model(model, X_test, y_test, feature_names, model_type='vs'):
     # Si el modelo tiene feature_importances_
     try:
         # Intentar obtener feature importances
-        if hasattr(model, 'named_steps') and hasattr(model.named_steps['model'], 'feature_importances_'):
-            importances = model.named_steps['model'].feature_importances_
+        if hasattr(model, 'feature_importances_'):
+            importances = model.feature_importances_
             
             # Crear gráfico de importancia de features
             plt.figure(figsize=(10, 6))
@@ -291,8 +223,8 @@ def evaluate_model(model, X_test, y_test, feature_names, model_type='vs'):
             plt.tight_layout()
             plt.savefig(figures_dir / f'feature_importance_{model_type}.png', dpi=300)
             plt.close()
-    except:
-        print("No se pudo generar gráfico de importancia de features")
+    except Exception as e:
+        print(f"No se pudo generar gráfico de importancia de features: {e}")
     
     # Devolver métricas
     return {
@@ -302,7 +234,7 @@ def evaluate_model(model, X_test, y_test, feature_names, model_type='vs'):
         'r2': r2
     }
 
-def save_model(model, model_type, metrics, feature_names):
+def save_model(model, model_type, metrics, feature_names, preprocessor=None):
     """
     Guarda el modelo entrenado y sus métricas.
     
@@ -311,11 +243,13 @@ def save_model(model, model_type, metrics, feature_names):
     model : object
         Modelo entrenado
     model_type : str
-        Tipo de modelo ('vs' o 'nspt')
+        Tipo de modelo ('nspt' o 'qadm')
     metrics : dict
         Métricas de evaluación
     feature_names : list
         Nombres de las features
+    preprocessor : object, optional
+        Preprocesador utilizado
     """
     # Crear directorio para modelos
     project_dir = Path(__file__).resolve().parents[2]
@@ -327,6 +261,12 @@ def save_model(model, model_type, metrics, feature_names):
     with open(model_path, 'wb') as f:
         pickle.dump(model, f)
     
+    # Guardar preprocesador si existe
+    if preprocessor is not None:
+        preprocessor_path = models_dir / f"preprocessor_{model_type}.pkl"
+        with open(preprocessor_path, 'wb') as f:
+            pickle.dump(preprocessor, f)
+    
     # Guardar métricas
     metrics_path = models_dir / f"metricas_{model_type}.json"
     
@@ -334,52 +274,90 @@ def save_model(model, model_type, metrics, feature_names):
     metrics['features'] = feature_names
     
     with open(metrics_path, 'w') as f:
-        json.dump(metrics, f)
+        json.dump(metrics, f, indent=4)
     
     print(f"Modelo y métricas guardados en: {models_dir}")
 
 def main():
-    """Función principal"""
+    """Función principal."""
     # Cargar datos
     print("Cargando datos procesados...")
     df = load_data()
     
     if df is None:
+        print("No se pudieron cargar los datos procesados.")
+        print("Ejecuta primero el script src.data.make_dataset para procesar los datos.")
         return
-    
-    # Entrenar modelo para Vs
-    print("\n--- Entrenando modelo para Velocidad S (Vs) ---")
-    X_train_vs, X_test_vs, y_train_vs, y_test_vs, features_vs = prepare_vs_depth_data(df)
-    
-    if X_train_vs is not None:
-        # Entrenar modelo
-        best_model_vs, _ = train_models(X_train_vs, y_train_vs, 'vs')
-        
-        # Evaluar modelo
-        metrics_vs = evaluate_model(best_model_vs, X_test_vs, y_test_vs, features_vs, 'vs')
-        print(f"Métricas de evaluación (Vs):")
-        print(f"  RMSE: {metrics_vs['rmse']:.2f} m/s")
-        print(f"  R²: {metrics_vs['r2']:.4f}")
-        
-        # Guardar modelo
-        save_model(best_model_vs, 'vs', metrics_vs, features_vs)
     
     # Entrenar modelo para NSPT
     print("\n--- Entrenando modelo para NSPT ---")
-    X_train_nspt, X_test_nspt, y_train_nspt, y_test_nspt, features_nspt = prepare_nspt_depth_data(df)
     
-    if X_train_nspt is not None:
+    # Preprocesar datos para NSPT
+    X, y, preprocessor = preprocess_for_nspt_prediction(df)
+    
+    if X is not None:
+        # Dividir en train/test
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.25, random_state=42
+        )
+        
+        # Guardar nombres de features
+        feature_names = X.columns.tolist()
+        
+        # Aplicar preprocesador
+        if preprocessor is not None:
+            X_train_prep = preprocessor.fit_transform(X_train)
+            X_test_prep = preprocessor.transform(X_test)
+        else:
+            X_train_prep = X_train
+            X_test_prep = X_test
+        
         # Entrenar modelo
-        best_model_nspt, _ = train_models(X_train_nspt, y_train_nspt, 'nspt')
+        best_model_nspt, _ = train_models(X_train_prep, y_train, 'nspt')
         
         # Evaluar modelo
-        metrics_nspt = evaluate_model(best_model_nspt, X_test_nspt, y_test_nspt, features_nspt, 'nspt')
+        metrics_nspt = evaluate_model(best_model_nspt, X_test_prep, y_test, feature_names, 'nspt')
         print(f"Métricas de evaluación (NSPT):")
         print(f"  RMSE: {metrics_nspt['rmse']:.2f}")
         print(f"  R²: {metrics_nspt['r2']:.4f}")
         
         # Guardar modelo
-        save_model(best_model_nspt, 'nspt', metrics_nspt, features_nspt)
+        save_model(best_model_nspt, 'nspt', metrics_nspt, feature_names, preprocessor)
+    
+    # Entrenar modelo para Qadm
+    print("\n--- Entrenando modelo para Qadm (Capacidad portante admisible) ---")
+    
+    # Preprocesar datos para Qadm
+    X, y, preprocessor = preprocess_for_qadm_prediction(df)
+    
+    if X is not None:
+        # Dividir en train/test
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.25, random_state=42
+        )
+        
+        # Guardar nombres de features
+        feature_names = X.columns.tolist()
+        
+        # Aplicar preprocesador
+        if preprocessor is not None:
+            X_train_prep = preprocessor.fit_transform(X_train)
+            X_test_prep = preprocessor.transform(X_test)
+        else:
+            X_train_prep = X_train
+            X_test_prep = X_test
+        
+        # Entrenar modelo
+        best_model_qadm, _ = train_models(X_train_prep, y_train, 'qadm')
+        
+        # Evaluar modelo
+        metrics_qadm = evaluate_model(best_model_qadm, X_test_prep, y_test, feature_names, 'qadm')
+        print(f"Métricas de evaluación (Qadm):")
+        print(f"  RMSE: {metrics_qadm['rmse']:.2f}")
+        print(f"  R²: {metrics_qadm['r2']:.4f}")
+        
+        # Guardar modelo
+        save_model(best_model_qadm, 'qadm', metrics_qadm, feature_names, preprocessor)
     
     print("\nEntrenamiento completado con éxito!")
 
